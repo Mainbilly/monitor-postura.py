@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Modelo MediaPipe baixado (14MB) — baixa automaticamente na primeira execução
+models/*.task
+
+# Banco de histórico de postura (dados de uso do usuário)
+*.db
+
+# IDE / SO
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
