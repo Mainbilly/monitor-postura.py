@@ -1,0 +1,153 @@
+"""
+tests/test_analysis.py
+======================
+Testes da lógica pura (sem câmera/MediaPipe/GUI): classificação, score,
+ângulo de inclinação (lean) e composição dual-camera.
+
+Execute de qualquer lugar com:
+    python -m unittest discover -s tests -v
+"""
+
+from __future__ import annotations
+
+import unittest
+
+import numpy as np
+
+import config
+from angle_calculator import (
+    LT_SHO, RT_SHO, LT_HIP, RT_HIP, LT_EAR, RT_EAR,
+    compute_all, forward_lean_angle,
+)
+from posture_analyzer import (
+    classify_value, score_angles, merge_dual_camera, evaluate,
+)
+
+
+def build_lm(points: dict, vis: float = 1.0) -> np.ndarray:
+    """Cria landmarks (33, 4) com x,y definidos para `points`."""
+    lm = np.zeros((33, 4), dtype=np.float32)
+    lm[:, 3] = vis
+    for idx, (x, y) in points.items():
+        lm[idx] = [x, y, 0.0, vis]
+    return lm
+
+
+class TestClassifyValue(unittest.TestCase):
+    def test_inclusive_boundaries(self):
+        bands = config.POSTURE_THRESHOLDS
+        # 180° (ereto) agora cai na faixa "good" do lean (antes caía em "bad").
+        self.assertEqual(classify_value(180.0, bands["lean"]), "good")
+        # Limites compartilhados são inclusivos — vence a primeira banda.
+        self.assertEqual(classify_value(140.0, bands["lean"]), "good")
+        self.assertEqual(classify_value(15.0, bands["cva"]), "good")
+        self.assertEqual(classify_value(25.0, bands["cva"]), "warning")
+
+    def test_mid_bands(self):
+        bands = config.POSTURE_THRESHOLDS
+        self.assertEqual(classify_value(130.0, bands["lean"]), "warning")
+        self.assertEqual(classify_value(110.0, bands["lean"]), "bad")
+        self.assertEqual(classify_value(50.0, bands["lean"]), "critical")
+
+    def test_out_of_all_bands_is_bad(self):
+        bands = config.POSTURE_THRESHOLDS
+        self.assertEqual(classify_value(200.0, bands["tilt"]), "bad")
+        self.assertEqual(classify_value(-5.0, bands["tilt"]), "bad")
+
+
+class TestScoreAngles(unittest.TestCase):
+    def test_perfect_score(self):
+        angles = {"tilt": 2.5, "lean": 160.0, "cva": 7.5,
+                  "kyphosis": 10.0, "lordosis": 12.5}
+        score, n = score_angles(angles)
+        self.assertEqual(score, 100.0)
+        self.assertEqual(n, 5)
+
+    def test_unknown_angle_not_counted(self):
+        angles = {"tilt": 2.5, "nome_inventado": 99.0}
+        score, n = score_angles(angles)
+        self.assertEqual(score, 100.0)
+        self.assertEqual(n, 1)
+
+    def test_out_of_range_zeroes(self):
+        # lean em 0 → bem longe do centro da faixa boa → 0 pontos.
+        score, n = score_angles({"lean": 0.0})
+        self.assertEqual(score, 0.0)
+        self.assertEqual(n, 1)
+
+
+class TestLeanDirection(unittest.TestCase):
+    """O FLA deve punir INCLINAR P/ FRENTE e ignorar inclinar p/ trás."""
+
+    def _lean_pair(self, dx: float):
+        """lm ereto + lm inclinado por `dx` (sinal ajustado à config)."""
+        sign = config.LEAN_FORWARD_X_SIGN
+        base = {LT_SHO: (0.5, 0.3), RT_SHO: (0.5, 0.3)}
+        erect = build_lm({**base, LT_HIP: (0.5, 0.6), RT_HIP: (0.5, 0.6)})
+        fwd = build_lm({**base, LT_HIP: (0.5 + sign * dx, 0.6),
+                        RT_HIP: (0.5 + sign * dx, 0.6)})
+        bwd = build_lm({**base, LT_HIP: (0.5 - sign * dx, 0.6),
+                        RT_HIP: (0.5 - sign * dx, 0.6)})
+        return (forward_lean_angle(erect)[0],
+                forward_lean_angle(fwd)[0],
+                forward_lean_angle(bwd)[0])
+
+    def test_upright_is_180(self):
+        erect, _, _ = self._lean_pair(0.06)
+        self.assertAlmostEqual(erect, 180.0, delta=1.0)
+
+    def test_forward_reduces_and_backward_does_not(self):
+        erect, fwd, bwd = self._lean_pair(0.06)
+        self.assertLess(fwd, erect - 5.0, "inclinar p/ frente deve baixar o ângulo")
+        self.assertGreaterEqual(bwd, 179.0, "inclinar p/ trás não pode ser punido")
+
+
+class TestAspectCorrection(unittest.TestCase):
+    def test_lean_angle_is_aspect_correct(self):
+        sign = config.LEAN_FORWARD_X_SIGN
+        # Em PIXELS, inclinação real de 45° (dx_px == dy_px == 48) num frame
+        # 640x480 → dx_norm = 48/640, dy_norm = 48/480.
+        dx, dy = 48 / 640, 48 / 480
+        base = {LT_SHO: (0.5, 0.3), RT_SHO: (0.5, 0.3)}
+        lm = build_lm({**base, LT_HIP: (0.5 + sign * dx, 0.3 + dy),
+                       RT_HIP: (0.5 + sign * dx, 0.3 + dy)})
+        correct = compute_all(lm, aspect=640 / 480)["lean"]
+        distorted = compute_all(lm, aspect=1.0)["lean"]
+        self.assertAlmostEqual(correct, 135.0, delta=1.0)
+        self.assertGreater(abs(distorted - 135.0), abs(correct - 135.0))
+
+    def test_low_visibility_angle_is_skipped(self):
+        lm = build_lm({LT_SHO: (0.5, 0.3), RT_SHO: (0.5, 0.3),
+                       LT_HIP: (0.5, 0.6), RT_HIP: (0.5, 0.6)}, vis=0.2)
+        self.assertNotIn("lean", compute_all(lm, 1.0))
+
+
+class TestMergeAndEvaluate(unittest.TestCase):
+    def test_merge_respects_camera_roles(self):
+        merged = merge_dual_camera({"tilt": 2.0}, {"lean": 150.0})
+        self.assertEqual(merged, {"tilt": 2.0, "lean": 150.0})
+
+    def test_merge_single_camera_fallback(self):
+        merged = merge_dual_camera({}, {"lean": 150.0})
+        self.assertEqual(merged.get("lean"), 150.0)
+        merged2 = merge_dual_camera({"lean": 150.0}, {})
+        self.assertEqual(merged2.get("lean"), 150.0)
+
+    def test_evaluate_perfect_posture(self):
+        front = {"tilt": 2.5}
+        side = {"cva": 7.5, "lean": 160.0, "kyphosis": 10.0, "lordosis": 12.5}
+        ev = evaluate(front, side)
+        self.assertEqual(ev["score"], 100.0)
+        self.assertEqual(ev["worst"], "good")
+        self.assertEqual(ev["cameras"], ["front", "side"])
+
+    def test_evaluate_worst_level(self):
+        front = {"tilt": 2.5}
+        side = {"cva": 7.5, "lean": 90.0, "kyphosis": 10.0, "lordosis": 12.5}
+        ev = evaluate(front, side)
+        self.assertEqual(ev["worst"], "critical")
+        self.assertEqual(ev["levels"]["lean"], "critical")
+
+
+if __name__ == "__main__":
+    unittest.main()

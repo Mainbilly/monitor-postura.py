@@ -17,10 +17,15 @@ MODELS_DIR = BASE_DIR / "models"
 SOUNDS_DIR = BASE_DIR / "sounds"
 LOG_DB_PATH = BASE_DIR / "posture_history.db"
 
-# URL do modelo .task download automático (segunda versão, com z-scoring)
+# URL do modelo .task para download automático.
+# PINADA numa versão concreta (float16/1) em vez de "latest", para que a
+# atualização do modelo pelo Google NÃO mude o comportamento do app sem
+# controle. Para atualizar manualmente, trote o "1" deste caminho pela
+# versão mais nova em:
+#   https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/
 POSE_MODEL_URL = (
     "https://storage.googleapis.com/mediapipe-models/pose_landmarker/"
-    "pose_landmarker_full/float16/latest/pose_landmarker_full.task"
+    "pose_landmarker_full/float16/1/pose_landmarker_full.task"
 )
 POSE_MODEL_PATH = MODELS_DIR / "pose_landmarker_full.task"
 
@@ -61,7 +66,25 @@ CAMERAS = [
 ]
 
 # ---------------------------------------------------------------------------
-# Ângulos monitorados (todas as comparações usam intervalos [min, max))
+# Lógica de inclinação para frente (lean)
+# ---------------------------------------------------------------------------
+# Convenção de sinal da câmera LATERAL para a inclinação do tronco.
+#
+# O `forward_lean_angle` precisa saber em que direção do frame o usuário
+# "inclina para frente" para distinguir inclinação para frente de para trás.
+# No sistema de câmera MediaPipe, x cresce para a DIREITA da imagem.
+#
+# `LEAN_FORWARD_X_SIGN` é o expectável disposição de v[0] = hip.x - shoulder.x
+# quando o usuário se inclina para frente:
+#   -1  ->  inclinar p/ frente faz v[0] ficar NEGATIVO (ombros vão p/ a direita)
+#   +1  ->  ... POSITIVO (ombros vão p/ a esquerda)
+#
+# Se, ao testar, "inclinar para trás" estiver reduzindo o score, INVERTA o
+# sinal desta constante.
+LEAN_FORWARD_X_SIGN = -1
+
+# ---------------------------------------------------------------------------
+# Banco de dados
 # ---------------------------------------------------------------------------
 # Cada chave: bandas "good", "warning", "bad", "critical".
 # A classificação pega a PRIMEIRA banda que contém o ângulo medido.

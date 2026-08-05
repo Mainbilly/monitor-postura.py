@@ -13,6 +13,7 @@ A thread principal consome as filas de forma não-bloqueante.
 
 from __future__ import annotations
 
+import logging
 import queue
 import threading
 import time
@@ -22,9 +23,48 @@ import cv2
 from pose_detector import PoseDetector
 
 # Intervalo mínimo entre ciclos de inferência por câmera (s).
-# Limita a carga nas threads (GIL) e deixa folga para a GUI compor os frames
-# sem piscar/atrasar. ~20 FPS já é fluido o bastante para detecção de postura.
+# Limita a velocidade nas threads (GIL) e deixa folga para a GUI compor os
+# frames sem piscar/atrasar. ~20 FPS já é fluido o suficiente para detecção.
 WORKER_MIN_INTERVAL = 0.05  # 50 ms -> ~20 FPS por câmera
+
+# LOG: rastrear o crash "abre-congela-fecha" reportado (Media Foundation/Intel
+# MFX). Mensagens de erros de captura vão para cá.
+log = logging.getLogger("posture.camera")
+if not log.handlers:
+    log.addHandler(logging.StreamHandler())
+    log.setLevel(logging.INFO)
+
+# ---------------------------------------------------------------------------
+# Backend de captura
+# ---------------------------------------------------------------------------
+# "abre-congela-fecha": o python.exe crashava com 0xc0000005 dentro de
+# mfx_media_merit_64.dll (driver Intel MFX, via Media Foundation). O backend
+# padrão do OpenCV (CAP_ANY -> MSMF) delega a captura ao MsMF/Intel e o driver
+# crashado derrubava o processo. O DShow (CAP_DSHOW) NÃO passa pela mesma
+# pilha de Media Foundation, evitando o driver. Preferimos CAP_DSHOW e, se o
+# build não tiver esse backend, caímos para o padrão (CAP_ANY).
+CAPTURE_BACKEND = getattr(cv2, "CAP_DSHOW", -1)
+
+# Falhas de leitura consecutivas antes de desistir da câmera. Um único frame
+# ruim (webcam engasgou) NÃO deve matar a thread; só paramos depois de um
+# período real de ausência de vídeo.
+MAX_CONSECUTIVE_READ_FAILURES = 30  # ~1.5 s a ~20 FPS
+
+
+def _open_capture(cam_id: int) -> tuple[cv2.VideoCapture | None, str]:
+    """Abre a câmera com o backend preferido, com fallback para CAP_ANY."""
+    for backend, label in ((CAPTURE_BACKEND, "DSHOW"), (cv2.CAP_ANY, "ANY")):
+        cap = None
+        try:
+            cap = cv2.VideoCapture(cam_id, backend)
+            if cap is not None and cap.isOpened():
+                return cap, f"cap({label}) cam {cam_id}"
+        except Exception as exc:  # pragma: no cover
+            log.warning("%s falhou para cam %s: %s", label, cam_id, exc)
+        # Não devolveu: libera o objeto (pode ter sido alocado sem abrir).
+        if cap is not None:
+            cap.release()
+    return None, ""
 
 
 class CameraWorker(threading.Thread):
@@ -41,10 +81,13 @@ class CameraWorker(threading.Thread):
         self._stop.set()
 
     def run(self):
-        cap = cv2.VideoCapture(self.cam_id)
-        if not cap.isOpened():
-            self.out_queue.put({"role": self.role, "ok": False, "error": "não abriu"})
+        cap, opened_with = _open_capture(self.cam_id)
+        if cap is None:
+            self.out_queue.put({"role": self.role, "ok": False,
+                                "error": "não abriu (nem DSHOW nem ANY)"})
+            log.error("[%s] câmera %s não abriu", self.role, self.cam_id)
             return
+        log.info("[%s] abriu com %s", self.role, opened_with)
 
         # Espaça o carregamento do modelo entre as câmeras: carregar 2× TFLite
         # simultaneamente disputa CPU/GIL no boot e TRAVA a GUI que está abrindo.
@@ -52,12 +95,20 @@ class CameraWorker(threading.Thread):
             time.sleep(self._delay)
 
         detector = PoseDetector()
+        consec_fail = 0  # leituras falhas seguidas (engasgos não matam a thread)
         while not self._stop.is_set():
             cycle_start = time.monotonic()
 
             ret, frame = cap.read()
             if not ret:
-                break
+                consec_fail += 1
+                if consec_fail >= MAX_CONSECUTIVE_READ_FAILURES:
+                    log.error("[%s] câmera %s parou de responder",
+                              self.role, self.cam_id)
+                    break
+                time.sleep(WORKER_MIN_INTERVAL)
+                continue
+            consec_fail = 0
             # Timestamp em ms derivado de tempo real (não um contador fixo),
             # para o MediaPipe tratar como tracking e não re-disparar detecção.
             ts = int(time.monotonic() * 1000)

@@ -1,0 +1,9 @@
+# Monitor de Postura — dependências.
+# Instale com:  pip install -r requirements.txt
+#
+# O modelo MediaPipe (.task) é baixado automaticamente na primeira execução.
+
+opencv-python>=4.8
+mediapipe>=0.10.0
+numpy>=1.24
+PyQt5>=5.15.0

@@ -21,10 +21,15 @@ import config
 
 
 def classify_value(value: float, bands) -> str:
-    """Classifica um valor em uma das bandas configuradas (primeira que casa)."""
+    """Classifica um valor em uma das bandas configuradas (primeira que casa).
+
+    Os limites das bandas são INCLUSIVOS (lo <= value <= hi): caso contrário,
+    um valor exatamente no topo de uma banda (ex.: lean = 180°, postura
+    ereta) não cairia em nenhuma faixa e seria classificado como "bad".
+    """
     for level in config.POSTURE_LEVELS:
         lo, hi = bands[level]
-        if lo <= value < hi:
+        if lo <= value <= hi:
             return level
     # Fora de todas as faixas: considera o pior "bad".
     return "bad"
@@ -51,11 +56,12 @@ def score_angles(angles: dict) -> tuple[float, int]:
     """
     total_w = 0.0
     acc = 0.0
+    n_angles = 0  # contagem REAL dos ângulos que entraram no cálculo
     for name, val in angles.items():
         try:
             w = config.SCORE_WEIGHTS[name]
         except KeyError:
-            continue
+            continue  # sem peso -> NÃO conta (não fez parte do cálculo)
         g_lo, g_hi = _band_for(name)["good"]
         # Medida = distância relativa ao centro da faixa boa.
         center = (g_lo + g_hi) / 2
@@ -65,9 +71,10 @@ def score_angles(angles: dict) -> tuple[float, int]:
         points = max(0.0, 100.0 - 33.0 * dist)  # 33 ≈ 100/3
         acc += points * w
         total_w += w
+        n_angles += 1
     if total_w == 0:
         return 0.0, 0
-    return round(acc / total_w, 1), len(angles)
+    return round(acc / total_w, 1), n_angles
 
 
 # ---------------------------------------------------------------------------

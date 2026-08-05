@@ -80,19 +80,20 @@ class MainWindow(QtWidgets.QWidget):
         # em placeholder — evitando o piscar preto entre "vídeo"/"sem vídeo".
         for role, w in self.cam_widgets.items():
             if role in roles:
-                if hasattr(w, "_no_video_since"):
-                    w._no_video_since = None
+                w._no_video_since = 0
             else:
-                w._no_video_since = getattr(w, "_no_video_since", 0) + 1
+                w._no_video_since += 1
                 # Só mostra placeholder depois de N ticks consecutivos sem frame.
-                if getattr(w, "_no_video_since", 0) >= 15:
+                if w._no_video_since >= 15:
                     w.set_placeholder(f"[{role}] sem vídeo...")
 
         if not latest:
             return  # nenhum frame este tick; mantém último quadro desenhado
 
-        front_angles = compute_all(front["landmarks"]) if front else {}
-        side_angles = compute_all(side["landmarks"]) if side else {}
+        front_angles = compute_all(front["landmarks"],
+                                   _aspect(front["frame"])) if front else {}
+        side_angles = compute_all(side["landmarks"],
+                                  _aspect(side["frame"])) if side else {}
         evaluation = evaluate(front_angles, side_angles)
 
         # Overlay de vídeo (nível de cada papel)
@@ -117,6 +118,12 @@ class MainWindow(QtWidgets.QWidget):
 def _qss_color(level: str) -> str:
     return {"good": "green", "warning": "orange",
             "bad": "orange", "critical": "red"}.get(level, "white")
+
+
+def _aspect(frame) -> float:
+    """Razão largura/altura do frame (para compensar a distorção de aspecto)."""
+    h, w = frame.shape[:2]
+    return w / h if h else 1.0
 
 
 def first_level(levels: dict, names: list) -> str | None:

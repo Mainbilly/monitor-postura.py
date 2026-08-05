@@ -13,8 +13,10 @@ Todos os cálculos assumem imagem de corpo inteiro (ou, no pior caso,
     25 left_knee · 26 right_knee
 
 Entradas: `lm` é um np.ndarray de shape (33, 4) com colunas
-[x, y, z, visibility], todos normalizados em [0, 1] relativo à LARGURA.
-O eixo y cresce para baixo (origem no canto superior esquerdo).
+[x, y, z, visibility], normalizados em [0, 1] — x relativo à LARGURA e y
+relativo à ALTURA (MediaPipe). O eixo y cresce para baixo (origem no canto
+superior esquerdo). Use compute_all(lm, aspect=w/h) para compensar a
+diferença de escala entre os dois eixos.
 """
 
 from __future__ import annotations
@@ -85,19 +87,30 @@ def craniovertebral_angle(lm):
 
 def forward_lean_angle(lm):
     """
-    FLA — Inclinação do tronco em relação à vertical (câmera LATERAL).
+    FLA — Inclinação do tronco para a frente (câmera LATERAL).
     Ângulo entre a reta pescoço→quadril e a vertical, definido de modo que
     ERETO ≈ 175-180° e, quanto mais o usuário se inclina para a frente, menor
     o valor (tendendo a ~90°). MAIOR = melhor (semântica do papel):
-        upright  ~ 180°
-        inclinado ~ 135°
-        tombado   ~ 90°
+        upright      ~ 180°
+        inclinado    ~ 135°
+        tombado      ~ 90°
+
+    Convenção de sinal: o componente horizontal é multiplicado por
+    config.LEAN_FORWARD_X_SIGN para que inclinar para FRENTE sempre reduza o
+    ângulo. Assim, inclinar para trás (v[0] com sinal contrário) deixa o
+    ângulo ~180° e não é contado como inclinação ruim. Se a sua câmera lateral
+    estiver espelhada, inverta LEAN_FORWARD_X_SIGN em config.py.
     """
     neck = _mid(lm, LT_SHO, RT_SHO)
     hip = _mid(lm, LT_HIP, RT_HIP)
     v = hip - neck                # pescoço -> quadril (aponta para baixo)
-    a = np.degrees(np.arctan2(np.abs(v[0]), np.abs(v[1])))  # desvio da vertical
-    return float(180.0 - a), _conf(lm, LT_SHO, RT_SHO, LT_HIP, RT_HIP)
+    # Componente horizontal com sinal: positivo = inclinação p/ frente,
+    # negativo = inclinação p/ trás (segundo a convenção de config).
+    fwd_x = config.LEAN_FORWARD_X_SIGN * v[0]
+    # arctan2 deixa o sinal escapar: dev < 0 => inclinado para TRÁS.
+    dev = np.degrees(np.arctan2(fwd_x, abs(v[1])))
+    # Inclinação p/ trás (dev < 0) NÃO é punida: ângulo permanece ~180°.
+    return float(180.0 - max(0.0, dev)), _conf(lm, LT_SHO, RT_SHO, LT_HIP, RT_HIP)
 
 
 def thoracic_kyphosis_angle(lm):
@@ -147,13 +160,22 @@ def shoulder_tilt_angle(lm):
 # ---------------------------------------------------------------------------
 # API única
 # ---------------------------------------------------------------------------
-def compute_all(lm):
+def compute_all(lm, aspect: float = 1.0):
     """
     Retorna dict {nome_do_angulo: valor_float} para todos os ângulos válidos.
     Medições com confiança insuficiente (ou pontos ausentes) são ignoradas.
+
+    aspect: razão largura/altura do frame (w/h). O MediaPipe normaliza x em
+    relação à LARGURA e y em relação à ALTURA; num frame não-quadrado (ex.:
+    640x480) isso distorce os ângulos. Antes de calcular, x é resscalado para
+    a mesma métrica de y (unidades de altura), tornando a geometria correta.
     """
     if lm is None:
         return {}
+    # Cópia resscalada: só a componente x muda; y já está na métrica correta.
+    if aspect and aspect != 1.0:
+        lm = lm.copy()
+        lm[:, 0] *= aspect
     funcs = {
         "cva":       craniovertebral_angle,
         "lean":      forward_lean_angle,

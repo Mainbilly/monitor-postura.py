@@ -27,6 +27,7 @@ class CameraWidget(QtWidgets.QWidget):
         self._frame: QtGui.QImage | None = None
         self._level: str | None = None
         self._placeholder = True
+        self._no_video_since = 0
 
     def update_frame(self, frame_bgr: np.ndarray, level: str | None = None) -> None:
         rgb = cv2_bgr_to_rgb(frame_bgr)
