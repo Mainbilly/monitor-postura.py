@@ -28,11 +28,20 @@ class PostureLogger:
                 lean          REAL,
                 kyphosis      REAL,
                 lordosis      REAL,
-                tilt          REAL
+                tilt          REAL,
+                nose_fwd      REAL
             )"""
         )
         self._conn.commit()
+        self._ensure_column("nose_fwd", "REAL")
         self._last_log = 0.0
+
+    def _ensure_column(self, column: str, decl: str):
+        """Migração simples: adiciona coluna se não existir (schema antigo)."""
+        cols = {r[1] for r in self._conn.execute("PRAGMA table_info(posture_log)")}
+        if column not in cols:
+            self._conn.execute(f"ALTER TABLE posture_log ADD COLUMN {column} {decl}")
+            self._conn.commit()
 
     def log(self, evaluation: dict, now: float | None = None) -> bool:
         """Grava se o intervalo já passou. Retorna True se gravou."""
@@ -42,7 +51,7 @@ class PostureLogger:
 
         vals = evaluation.get("angles", {})
         self._conn.execute(
-            "INSERT INTO posture_log VALUES (?,?,?,?,?,?,?,?)",
+            "INSERT INTO posture_log VALUES (?,?,?,?,?,?,?,?,?)",
             (
                 now,
                 evaluation.get("score", 0.0),
@@ -52,6 +61,7 @@ class PostureLogger:
                 vals.get("kyphosis", {}).get("value"),
                 vals.get("lordosis", {}).get("value"),
                 vals.get("tilt", {}).get("value"),
+                vals.get("nose_fwd", {}).get("value"),
             ),
         )
         self._conn.commit()

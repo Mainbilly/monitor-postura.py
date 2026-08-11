@@ -1,8 +1,9 @@
 """
 gui/camera_widget.py
 ====================
-Widget PyQt5 que exibe o stream de vídeo de uma câmera, com overlay
-do esqueleto e do nível de postura.
+Widget PyQt5 que exibe o stream de vídeo de uma câmera (com o esqueleto
+desenhado pelo detector). O vídeo NÃO é tintado pelo nível de postura:
+a medição fica apenas no painel de estatísticas.
 
 Implementado como um QWidget com paintEvent (em vez de QLabel+setPixmap)
 para EVITAR o flickering: o widget pinta o pixmap por cima do conteúdo
@@ -25,19 +26,15 @@ class CameraWidget(QtWidgets.QWidget):
         self.setAttribute(QtCore.Qt.WA_NoSystemBackground)
 
         self._frame: QtGui.QImage | None = None
-        self._level: str | None = None
         self._placeholder = True
         self._no_video_since = 0
+        self._title = role.capitalize()
 
-    def update_frame(self, frame_bgr: np.ndarray, level: str | None = None) -> None:
+    def update_frame(self, frame_bgr: np.ndarray) -> None:
+        # O vídeo é exibido SEM tint/overlay de nível: a medição de postura
+        # fica por conta apenas do painel de estatísticas (o "medidor").
         rgb = cv2_bgr_to_rgb(frame_bgr)
         h, w, ch = rgb.shape
-
-        if level:
-            red, green, blue = level_color(level)
-            rgb[:, :, :] = rgb[:, :, :].astype(np.float64) * 0.85 + \
-                np.array([red, green, blue], dtype=np.float64) * 0.15
-            rgb = rgb.astype(np.uint8)
 
         # Garantir que QImage possua os dados (não só referência).
         rgb = np.ascontiguousarray(rgb)
@@ -49,7 +46,6 @@ class CameraWidget(QtWidgets.QWidget):
     def set_placeholder(self, text: str) -> None:
         self._placeholder = True
         self._frame = None
-        self._level = None
         self._placeholder_text = text
         self.update()
 
@@ -68,24 +64,23 @@ class CameraWidget(QtWidgets.QWidget):
         pix = QtGui.QPixmap.fromImage(self._frame)
         target = pix.size()
         target.scale(self.size(), QtCore.Qt.KeepAspectRatio)
-        # (QtGui.QSize já escala em-place; QSize.scale retorna self)
+        # (QtCore.QSize escala in-place; QSize.scale retorna None)
         x = (self.width() - target.width()) // 2
         y = (self.height() - target.height()) // 2
         painter.drawPixmap(x, y, target.width(), target.height(), pix)
+
+        # Selo com o nome do papel da câmera (Frontal / Lateral).
+        fm = painter.fontMetrics()
+        pad = 5
+        tw = fm.horizontalAdvance(self._title) if hasattr(fm, "horizontalAdvance") \
+            else fm.width(self._title)
+        label = QtCore.QRect(10, 10, tw + 2 * pad, fm.height() + 2 * pad)
+        painter.fillRect(label, QtGui.QColor(20, 20, 35, 190))
+        painter.setPen(QtGui.QColor("#ffffff"))
+        painter.drawText(label, QtCore.Qt.AlignCenter, self._title)
         painter.end()
 
 
 def cv2_bgr_to_rgb(bgr):
     import cv2
     return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-
-
-def level_color(level: str) -> tuple[int, int, int]:
-    # RGB
-    colors = {
-        "good":     (0, 200, 0),
-        "warning":  (255, 200, 0),
-        "bad":      (255, 120, 0),
-        "critical": (255, 0, 0),
-    }
-    return colors.get(level, (255, 255, 255))

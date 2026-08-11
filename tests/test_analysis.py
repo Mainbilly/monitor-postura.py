@@ -17,7 +17,7 @@ import numpy as np
 import config
 from angle_calculator import (
     LT_SHO, RT_SHO, LT_HIP, RT_HIP, LT_EAR, RT_EAR,
-    compute_all, forward_lean_angle,
+    compute_all, forward_lean_angle, shoulder_tilt_angle, nose_forward_angle,
 )
 from posture_analyzer import (
     classify_value, score_angles, merge_dual_camera, evaluate,
@@ -70,10 +70,83 @@ class TestScoreAngles(unittest.TestCase):
         self.assertEqual(n, 1)
 
     def test_out_of_range_zeroes(self):
-        # lean em 0 → bem longe do centro da faixa boa → 0 pontos.
+        # lean em 0 → no extremo crítico → 0 pontos.
         score, n = score_angles({"lean": 0.0})
         self.assertEqual(score, 0.0)
         self.assertEqual(n, 1)
+
+    def test_ideal_at_band_edge_is_100(self):
+        # Postura PERFEITA costuma ficar na BORDA da faixa "good"
+        # (ex.: lean=180°, cva=0°). Antes o score ficava preso em ~67
+        # porque media a distância ao CENTRO da faixa.
+        angles = {"tilt": 0.0, "lean": 180.0, "cva": 0.0,
+                  "kyphosis": 0.0, "lordosis": 0.0}
+        score, n = score_angles(angles)
+        self.assertEqual(score, 100.0)
+        self.assertEqual(n, 5)
+
+    def test_scores_decrease_by_level(self):
+        good = {"tilt": 2.5, "lean": 160.0, "cva": 7.5,
+                "kyphosis": 10.0, "lordosis": 12.5}
+        warning = {"tilt": 7.0, "lean": 130.0, "cva": 22.0,
+                   "kyphosis": 28.0, "lordosis": 32.0}
+        bad = {"tilt": 12.0, "lean": 110.0, "cva": 32.0,
+               "kyphosis": 42.0, "lordosis": 47.0}
+        critical = {"tilt": 20.0, "lean": 80.0, "cva": 55.0,
+                    "kyphosis": 70.0, "lordosis": 70.0}
+        sg, _, = score_angles(good)
+        sw, _, = score_angles(warning)
+        sb, _, = score_angles(bad)
+        sc, _, = score_angles(critical)
+        self.assertGreater(sg, sw)
+        self.assertGreater(sw, sb)
+        self.assertGreater(sb, sc)
+        self.assertGreaterEqual(sg, 80.0)
+        self.assertLessEqual(sc, 40.0)
+
+
+class TestShoulderTilt(unittest.TestCase):
+    """O tilt deve medir o DESVIO da linha dos ombros à horizontal (0-90°)."""
+
+    def _lm(self, lx, ly, rx, ry):
+        return build_lm({LT_SHO: (lx, ly), RT_SHO: (rx, ry)})
+
+    def test_level_shoulders_either_orientation(self):
+        # dx negativo (ombro direito à esquerda) é o NORMAL na imagem: antes
+        # devolvia ~180° e derrubava o score. Nivelado deve dar ~0°.
+        for dx in (-0.1, 0.1):
+            ang, _ = shoulder_tilt_angle(self._lm(0.5, 0.3, 0.5 + dx, 0.3))
+            self.assertAlmostEqual(ang, 0.0, delta=1.0)
+
+    def test_angled_shoulders_magnitude(self):
+        # Inclinação real ~11° (dy=0.02, dx=0.1), em qualquer orientação.
+        for dx in (-0.1, 0.1):
+            ang, _ = shoulder_tilt_angle(self._lm(0.5, 0.3, 0.5 + dx, 0.3 - 0.02))
+            self.assertAlmostEqual(ang, 11.31, delta=1.5)
+
+
+class TestNoseForward(unittest.TestCase):
+    """O nose_fwd deve crescer quando o nariz avança além dos ombros."""
+
+    def test_aligned_is_near_zero(self):
+        lm = build_lm({0: (0.5, 0.25), 7: (0.5, 0.3), 8: (0.5, 0.3),
+                       LT_SHO: (0.5, 0.4), RT_SHO: (0.5, 0.4)})
+        ang, _ = nose_forward_angle(lm)
+        self.assertLess(ang, 5.0)
+
+    def test_forward_increases(self):
+        aligned = build_lm({0: (0.5, 0.25), 7: (0.5, 0.3), 8: (0.5, 0.3),
+                            LT_SHO: (0.5, 0.4), RT_SHO: (0.5, 0.4)})
+        fwd = build_lm({0: (0.62, 0.25), 7: (0.5, 0.3), 8: (0.5, 0.3),
+                        LT_SHO: (0.5, 0.4), RT_SHO: (0.5, 0.4)})
+        a0, _ = nose_forward_angle(aligned)
+        a1, _ = nose_forward_angle(fwd)
+        self.assertGreater(a1, a0 + 15.0)
+
+    def test_in_compute_all(self):
+        lm = build_lm({0: (0.6, 0.25), 7: (0.5, 0.3), 8: (0.5, 0.3),
+                       LT_SHO: (0.5, 0.4), RT_SHO: (0.5, 0.4)})
+        self.assertIn("nose_fwd", compute_all(lm, 1.0))
 
 
 class TestLeanDirection(unittest.TestCase):
@@ -127,6 +200,10 @@ class TestMergeAndEvaluate(unittest.TestCase):
         merged = merge_dual_camera({"tilt": 2.0}, {"lean": 150.0})
         self.assertEqual(merged, {"tilt": 2.0, "lean": 150.0})
 
+    def test_merge_side_nose_fwd(self):
+        merged = merge_dual_camera({}, {"nose_fwd": 30.0})
+        self.assertEqual(merged.get("nose_fwd"), 30.0)
+
     def test_merge_single_camera_fallback(self):
         merged = merge_dual_camera({}, {"lean": 150.0})
         self.assertEqual(merged.get("lean"), 150.0)
@@ -147,6 +224,23 @@ class TestMergeAndEvaluate(unittest.TestCase):
         ev = evaluate(front, side)
         self.assertEqual(ev["worst"], "critical")
         self.assertEqual(ev["levels"]["lean"], "critical")
+
+
+class TestSmoothing(unittest.TestCase):
+    """A suavização (EMA) via evaluate(prev_angles=...) deve misturar valores."""
+
+    def test_blends_with_previous_value(self):
+        ev = evaluate({"lean": 150.0}, {}, prev_angles={"lean": 180.0}, alpha=0.5)
+        # 0.5*150 + 0.5*180 = 165
+        self.assertAlmostEqual(ev["angles"]["lean"]["value"], 165.0, delta=0.5)
+
+    def test_without_prev_angles_is_pure(self):
+        ev = evaluate({"lean": 150.0}, {})
+        self.assertAlmostEqual(ev["angles"]["lean"]["value"], 150.0, delta=0.01)
+
+    def test_alpha_one_is_pure(self):
+        ev = evaluate({"lean": 150.0}, {}, prev_angles={"lean": 180.0}, alpha=1.0)
+        self.assertAlmostEqual(ev["angles"]["lean"]["value"], 150.0, delta=0.01)
 
 
 if __name__ == "__main__":

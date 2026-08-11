@@ -14,24 +14,44 @@ Dica: cubra UMA das câmeras por vez e observe qual janela mostra o índice.
 """
 import cv2
 
+# Mesmo backend do app (utils/camera_manager.py): o CAP_ANY delega ao
+# Media Foundation/MSMF, que pode travar o driver Intel MFX. O DShow não
+# passa por essa pilha.
+_CAPTURE_BACKEND = getattr(cv2, "CAP_DSHOW", -1)
+
+
+def _open_capture(index: int):
+    """Abre a câmera com o backend preferido (DSHOW), com fallback para ANY."""
+    for backend in (_CAPTURE_BACKEND, cv2.CAP_ANY):
+        cap = None
+        try:
+            cap = cv2.VideoCapture(index, backend)
+            if cap is not None and cap.isOpened():
+                return cap
+        except Exception:
+            pass
+        if cap is not None:
+            cap.release()
+    return None
+
 
 def find_available_cameras(max_index: int = 6) -> list[int]:
     """Retorna os índices que conseguiram abrir uma câmera."""
     available = []
     for i in range(max_index):
-        cap = cv2.VideoCapture(i)
-        if cap.isOpened():
+        cap = _open_capture(i)
+        if cap is not None:
             # tenta ler 1 frame para confirmar que há sinal
             ok, _ = cap.read()
             available.append((i, ok))
-        cap.release()
+            cap.release()
     return available
 
 
 def preview(index: int, duration_sec: int = 5) -> None:
     """Mostra a prévia de uma câmera com o índice escrito na tela."""
-    cap = cv2.VideoCapture(index)
-    if not cap.isOpened():
+    cap = _open_capture(index)
+    if cap is None:
         print(f"[{index}] não abriu")
         return
 

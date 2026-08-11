@@ -25,6 +25,8 @@ class MainWindow(QtWidgets.QWidget):
         super().__init__()
         self.setWindowTitle(config.WINDOW_TITLE)
         self.resize(960, 540)
+        self.setObjectName("MainWindow")
+        self.setStyleSheet(_QSS)
 
         # Widgets
         self.cam_widgets = {
@@ -54,6 +56,9 @@ class MainWindow(QtWidgets.QWidget):
         self.camera_mgr = CameraManager(config.CAMERAS)
         self.camera_mgr.start()
 
+        # Suavização (EMA) dos ângulos entre frames — evita o medidor oscilando.
+        self._prev_angles: dict | None = None
+
         # Loop de UI
         self.timer = QtCore.QTimer(self)
         self.timer.timeout.connect(self._loop)
@@ -61,10 +66,10 @@ class MainWindow(QtWidgets.QWidget):
 
     def _on_alert(self, level: str) -> None:
         self.sound.play(level)
-        # Flash na borda da janela + label.
-        self.setStyleSheet("border:3px solid "
-                           + _qss_color(level) + ";")
-        QtCore.QTimer.singleShot(2000, lambda: self.setStyleSheet(""))
+        # Flash na borda da janela (mantém o tema escuro do app).
+        flash = _QSS + f"\nQWidget#MainWindow {{ border: 3px solid {_qss_color(level)}; }}"
+        self.setStyleSheet(flash)
+        QtCore.QTimer.singleShot(2000, lambda: self.setStyleSheet(_QSS))
 
     def _loop(self) -> None:
         latest, errors = self.camera_mgr.drain(latest_per_role=True)
@@ -94,21 +99,20 @@ class MainWindow(QtWidgets.QWidget):
                                    _aspect(front["frame"])) if front else {}
         side_angles = compute_all(side["landmarks"],
                                   _aspect(side["frame"])) if side else {}
-        evaluation = evaluate(front_angles, side_angles)
+        evaluation = evaluate(front_angles, side_angles,
+                              prev_angles=self._prev_angles)
+        self._prev_angles = {n: info["value"]
+                             for n, info in evaluation["angles"].items()}
 
-        # Overlay de vídeo (nível de cada papel)
-        front_level = evaluation["levels"].get(
-            "tilt", evaluation["levels"].get("cva"))
+        # Vídeo exibido SEM tint/overlay: a medição de postura fica apenas
+        # no painel de estatísticas (o "medidor").
         if front:
-            self.cam_widgets["front"].update_frame(front["frame"], front_level)
+            self.cam_widgets["front"].update_frame(front["frame"])
         if side:
-            side_level = first_level(evaluation["levels"],
-                                     ["lean", "kyphosis", "lordosis"])
-            self.cam_widgets["side"].update_frame(side["frame"], side_level)
+            self.cam_widgets["side"].update_frame(side["frame"])
 
         # Alertas e logging
-        if evaluation["worst"]:
-            self.alert.update(evaluation["worst"])
+        self.alert.update(evaluation["worst"])
         self.logger.log(evaluation)
 
         # Stats
@@ -116,19 +120,32 @@ class MainWindow(QtWidgets.QWidget):
 
 
 def _qss_color(level: str) -> str:
-    return {"good": "green", "warning": "orange",
-            "bad": "orange", "critical": "red"}.get(level, "white")
+    return {"good": "#00C800", "warning": "#FFC800",
+            "bad": "#FF7800", "critical": "#FF0000"}.get(level, "#ffffff")
+
+
+_QSS = """
+QWidget#MainWindow {
+    background-color: #1e1e2e;
+    color: #e0e0e0;
+    font-family: "Segoe UI", Arial, sans-serif;
+    font-size: 13px;
+}
+QWidget#statsCard {
+    background-color: #26263a;
+    border: 1px solid #34344c;
+    border-radius: 12px;
+    padding: 10px;
+}
+QLabel#cardTitle {
+    color: #9a9ac0;
+    font-size: 12px;
+    font-weight: 600;
+}
+"""
 
 
 def _aspect(frame) -> float:
     """Razão largura/altura do frame (para compensar a distorção de aspecto)."""
     h, w = frame.shape[:2]
     return w / h if h else 1.0
-
-
-def first_level(levels: dict, names: list) -> str | None:
-    """Retorna o nível do primeiro ângulo (dado por `names`) presente em levels."""
-    for name in names:
-        if name in levels:
-            return levels[name]
-    return None

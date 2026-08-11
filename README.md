@@ -10,10 +10,14 @@ em SQLite.
 
 - **Dual-camera**: cada câmera roda em uma thread própria.
   - *frontal* → inclinação lateral dos ombros (`tilt`);
-  - *lateral* → cabeça pra frente (`cva`), inclinação do tronco (`lean`),
-    curvatura das costas (`kyphosis`) e arqueamento lombar (`lordosis`).
-- **Score 0–100**: média ponderada da distância de cada ângulo à sua faixa
-  "boa".
+  - *lateral* → cabeça pra frente (`cva` e `nose_fwd`), inclinação do tronco
+    (`lean`), curvatura das costas (`kyphosis`) e arqueamento lombar
+    (`lordosis`).
+  - `nose_fwd` (nariz) é um proxy de cabeça-à-frente que usa só nariz+ombros —
+    funciona sentado quando a câmera enquadra apenas cabeça e ombros.
+- **Score 0–100**: média ponderada; cada ângulo vale 100 dentro de toda a
+  sua faixa "good" e decai continuamente pelos níveis piores
+  (warning→bad→critical→0).
 - **Alertas** (som + borda vermelha): só após `ALERT_TRIGGER_SECONDS` de
   postura ruim contínua, com cooldown de `ALERT_SILENCE_SECONDS`.
 - **Histórico**: registros periódicos em `posture_history.db` (SQLite, sem

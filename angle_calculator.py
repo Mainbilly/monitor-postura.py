@@ -85,6 +85,24 @@ def craniovertebral_angle(lm):
     return float(angle), _conf(lm, LT_SHO, RT_SHO, LT_EAR, RT_EAR)
 
 
+def nose_forward_angle(lm):
+    """
+    NFA — Cabeça pra frente (proxy usando o NARIZ, câmera LATERAL).
+    Ângulo entre a reta pescoço→nariz e a vertical, no mesmo espírito do CVA,
+    porém MAIS SENSÍVEL: o nariz projeta mais à frente do rosto do que a
+    orelha, então a componente horizontal cresce mais cedo ao inclinar a
+    cabeça/parte superior. Valores MAIORES = cabeça mais projetada (pior);
+    alinhado ≈ 0°. Usa apenas nariz + ombros (sem precisar de quadril).
+    """
+    neck = _mid(lm, LT_SHO, RT_SHO)
+    nose = lm[NOSE][:2]
+    v = nose - neck             # pescoço -> nariz
+    h = np.abs(v[0])            # componente horizontal (para frente)
+    vert = np.abs(v[1])         # componente vertical
+    angle = np.degrees(np.arctan2(h, vert))
+    return float(angle), _conf(lm, NOSE, LT_SHO, RT_SHO)
+
+
 def forward_lean_angle(lm):
     """
     FLA — Inclinação do tronco para a frente (câmera LATERAL).
@@ -150,10 +168,17 @@ def shoulder_tilt_angle(lm):
     """
     Inclinação lateral dos ombros (assimetria de altura L/R).
     Ideal <5°; valores maiores indicam desequilíbrio.
+
+    Mede o DESVIO da linha dos ombros em relação à horizontal (0-90°). Um
+    `arctan2` puro devolveria 0° OU 180° para ombros nivelados, dependendo de
+    qual ombro aparece à esquerda na imagem (normal em coordenadas MediaPipe:
+    o ombro direito aparece à esquerda, dx<0). O `min(raw, 180-raw)` dobra o
+    ângulo para a menor diferença à horizontal.
     """
     dx = lm[RT_SHO][0] - lm[LT_SHO][0]
     dy = lm[LT_SHO][1] - lm[RT_SHO][1]  # sinal: ombro esquerdo mais alto
-    ang = abs(float(np.degrees(np.arctan2(dy, dx))))
+    raw = abs(float(np.degrees(np.arctan2(dy, dx))))
+    ang = min(raw, 180.0 - raw)
     return ang, _conf(lm, LT_SHO, RT_SHO)
 
 
@@ -178,6 +203,7 @@ def compute_all(lm, aspect: float = 1.0):
         lm[:, 0] *= aspect
     funcs = {
         "cva":       craniovertebral_angle,
+        "nose_fwd":  nose_forward_angle,
         "lean":      forward_lean_angle,
         "kyphosis":  thoracic_kyphosis_angle,
         "lordosis":  lumbar_lordosis_angle,

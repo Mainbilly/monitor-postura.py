@@ -42,14 +42,6 @@ POSE_NUM_POSES = 1
 KEYPOINT_MIN_CONFIDENCE = 0.5
 
 # ---------------------------------------------------------------------------
-# Dimensionamento do vídeo
-# ---------------------------------------------------------------------------
-CAM_FRAME_WIDTH = 640
-CAM_FRAME_HEIGHT = 480
-# O modelo espera entrada quadrada; mantém apenas a região central do frame.
-INPUT_SIZE = 256
-
-# ---------------------------------------------------------------------------
 # Câmeras
 # ---------------------------------------------------------------------------
 # Identificadores físicos das câmeras (índice do OpenCV) e o papel de cada uma.
@@ -99,6 +91,16 @@ POSTURE_THRESHOLDS = {
         "bad":       (25, 40),
         "critical":  (40, 91),
     },
+    # NFA — Cabeça pra frente via NARIZ (só nariz + ombros, sem quadril).
+    # Mesmo espírito do CVA, porém mais sensível (o nariz projeta mais à
+    # frente do rosto). MAIOR = pior. Funciona sentado com a câmera de perfil
+    # enquadrando apenas cabeça + ombros.
+    "nose_fwd": {
+        "good":      (0, 20),
+        "warning":   (20, 35),
+        "bad":       (35, 50),
+        "critical":  (50, 91),
+    },
     # FLA — Inclinação para frente. Ideal 140-159°.
     "lean": {
         "good":      (140, 180),
@@ -136,6 +138,7 @@ POSTURE_THRESHOLDS = {
 # ---------------------------------------------------------------------------
 SCORE_WEIGHTS = {
     "cva":      1.0,
+    "nose_fwd": 1.0,
     "lean":     1.0,
     "kyphosis": 1.0,
     "lordosis": 1.0,
@@ -154,14 +157,6 @@ ALERT_TRIGGER_SECONDS = 5.0
 # Cooldown: não repetir o mesmo alerta dentro deste intervalo (s).
 ALERT_SILENCE_SECONDS = 30.0
 
-# Cores dos níveis (BGR para OpenCV / RGB para UI).
-LEVEL_COLORS = {
-    "good":     (0, 200, 0),     # verde
-    "warning":  (0, 200, 255),   # amarelo
-    "bad":      (0, 120, 255),   # laranja
-    "critical": (0, 0, 255),     # vermelho
-}
-
 # ---------------------------------------------------------------------------
 # Sons
 # ---------------------------------------------------------------------------
@@ -174,6 +169,17 @@ SOUND_ENABLED = True
 # ---------------------------------------------------------------------------
 # A cada quantos segundos um registro de postura entra no banco SQLite.
 LOG_INTERVAL_SECONDS = 1.0
+
+# ---------------------------------------------------------------------------
+# Suavização (evita a oscilação do medidor)
+# ---------------------------------------------------------------------------
+# Fator EMA (exponential moving average) aplicado aos ângulos medidos antes
+# de classificar/gerar o score: cada novo valor vira
+#   alpha*novo + (1 - alpha)*anterior.
+# 1.0 = sem suavização; valores menores deixam o medidor mais estável (com
+# um pouco mais de "inércia"). Em ~20 FPS, alpha=0.3 suaviza bem sem atraso
+# perceptível (o alerta ainda exige 5s contínuos de postura ruim).
+SMOOTHING_ALPHA = 0.3
 
 # ---------------------------------------------------------------------------
 # GUI
