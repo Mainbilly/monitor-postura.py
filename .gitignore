@@ -12,6 +12,9 @@ models/*.task
 # Banco de histórico de postura (dados de uso do usuário)
 *.db
 *.db.bak
+*.db-journal
+*.db-wal
+*.db-shm
 
 # IDE / SO
 .vscode/
